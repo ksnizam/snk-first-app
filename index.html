@@ -123,6 +123,19 @@
     }
     .delete-btn:hover { color: #c0392b; }
 
+    /* Edit, Save and Cancel share one quiet button style */
+    .edit-btn, .save-btn, .cancel-btn {
+      background: none;
+      border: none;
+      color: var(--accent);
+      padding: 4px 8px;
+      border-radius: 6px;
+    }
+    .edit-btn:hover, .save-btn:hover, .cancel-btn:hover { text-decoration: underline; }
+
+    /* The text box that appears while editing a task */
+    li input.edit-input { padding: 8px 10px; min-width: 0; }
+
     /* Message shown when the list is empty */
     #empty {
       text-align: center;
@@ -160,6 +173,9 @@
     // 2. Our data: an array (list) of task objects like { text: "Buy milk", done: false }
     let tasks = [];
 
+    // Which task is being edited right now? null means none.
+    let editingIndex = null;
+
     // 3. Load saved tasks from the browser's memory (localStorage), if any exist.
     //    try/catch stops the app from crashing if storage is unavailable.
     try {
@@ -193,6 +209,7 @@
         checkbox.setAttribute("aria-label", "Mark done: " + task.text);
         checkbox.addEventListener("change", () => {
           tasks[index].done = checkbox.checked;
+          editingIndex = null;
           save();
           render();
         });
@@ -208,12 +225,66 @@
         del.setAttribute("aria-label", "Delete: " + task.text);
         del.addEventListener("click", () => {
           tasks.splice(index, 1);
+          editingIndex = null; // indexes shift after a delete, so leave edit mode
           save();
           render();
         });
 
-        li.append(checkbox, text, del);
-        list.appendChild(li);
+        if (index === editingIndex) {
+          // EDIT MODE: show a text box with Save and Cancel buttons
+          const editInput = document.createElement("input");
+          editInput.type = "text";
+          editInput.className = "edit-input";
+          editInput.value = task.text;
+          editInput.setAttribute("aria-label", "Edit task");
+
+          // Save the new text (ignore it if the box was emptied)
+          const saveEdit = () => {
+            const newText = editInput.value.trim();
+            if (newText !== "") tasks[index].text = newText;
+            editingIndex = null;
+            save();
+            render();
+          };
+          const cancelEdit = () => {
+            editingIndex = null;
+            render();
+          };
+
+          editInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") saveEdit();
+            if (event.key === "Escape") cancelEdit();
+          });
+
+          const saveBtn = document.createElement("button");
+          saveBtn.className = "save-btn";
+          saveBtn.textContent = "Save";
+          saveBtn.addEventListener("click", saveEdit);
+
+          const cancelBtn = document.createElement("button");
+          cancelBtn.className = "cancel-btn";
+          cancelBtn.textContent = "Cancel";
+          cancelBtn.addEventListener("click", cancelEdit);
+
+          li.append(checkbox, editInput, saveBtn, cancelBtn);
+          list.appendChild(li);
+
+          // Put the cursor in the box (must happen after it's on the page)
+          editInput.focus();
+        } else {
+          // NORMAL MODE: show the text with Edit and Delete buttons
+          const editBtn = document.createElement("button");
+          editBtn.className = "edit-btn";
+          editBtn.textContent = "Edit";
+          editBtn.setAttribute("aria-label", "Edit: " + task.text);
+          editBtn.addEventListener("click", () => {
+            editingIndex = index;
+            render();
+          });
+
+          li.append(checkbox, text, editBtn, del);
+          list.appendChild(li);
+        }
       });
 
       // Update the empty message and the "x of y done" summary
