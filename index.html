@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My To-Do List</title>
+
+  <!-- ============ CSS: how the page looks ============ -->
+  <style>
+    /* Colors live in variables so they're easy to change in one place */
+    :root {
+      --bg: #eef2f6;
+      --card: #ffffff;
+      --text: #1b2a3a;
+      --muted: #6b7a8a;
+      --line: #d9e1e9;
+      --accent: #2f5d8a;
+      --accent-text: #ffffff;
+      --done: #9aa8b6;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #131b24; --card: #1c2733; --text: #e8eef4; --muted: #8fa0b1;
+        --line: #2c3a49; --accent: #6fa3d6; --accent-text: #0f1720; --done: #5d6e7f;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Georgia, "Times New Roman", serif;
+      display: flex;
+      justify-content: center;
+      padding: 48px 16px;
+    }
+
+    main {
+      width: 100%;
+      max-width: 520px;
+    }
+
+    h1 {
+      font-size: 2.2rem;
+      margin: 0 0 4px;
+    }
+
+    #summary {
+      margin: 0 0 24px;
+      color: var(--muted);
+      font-family: system-ui, sans-serif;
+      font-size: 0.95rem;
+    }
+
+    /* The row with the text box and the Add button */
+    .add-row { display: flex; gap: 8px; margin-bottom: 16px; }
+
+    input[type="text"] {
+      flex: 1;
+      padding: 12px 14px;
+      font-size: 1rem;
+      font-family: system-ui, sans-serif;
+      color: var(--text);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    button {
+      font-family: system-ui, sans-serif;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+
+    .add-btn {
+      padding: 12px 18px;
+      background: var(--accent);
+      color: var(--accent-text);
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+    }
+
+    input:focus-visible, button:focus-visible {
+      outline: 3px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    li {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    li:last-child { border-bottom: none; }
+
+    li input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent); }
+
+    li span { flex: 1; overflow-wrap: anywhere; }
+
+    /* Style for finished tasks: faded and crossed out */
+    li.done span { color: var(--done); text-decoration: line-through; }
+
+    .delete-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      padding: 4px 8px;
+      border-radius: 6px;
+    }
+    .delete-btn:hover { color: #c0392b; }
+
+    /* Message shown when the list is empty */
+    #empty {
+      text-align: center;
+      color: var(--muted);
+      font-family: system-ui, sans-serif;
+      padding: 28px 0;
+    }
+  </style>
+</head>
+
+<!-- ============ HTML: the structure of the page ============ -->
+<body>
+  <main>
+    <h1>My to-do list</h1>
+    <p id="summary"></p>
+
+    <div class="add-row">
+      <input type="text" id="task-input" placeholder="What needs doing?" aria-label="New task" autofocus>
+      <button class="add-btn" id="add-btn">Add task</button>
+    </div>
+
+    <ul id="task-list"></ul>
+    <p id="empty">No tasks yet. Add your first one above.</p>
+  </main>
+
+  <!-- ============ JavaScript: how the page behaves ============ -->
+  <script>
+    // 1. Grab the elements we need to work with
+    const input = document.getElementById("task-input");
+    const addBtn = document.getElementById("add-btn");
+    const list = document.getElementById("task-list");
+    const emptyMsg = document.getElementById("empty");
+    const summary = document.getElementById("summary");
+
+    // 2. Our data: an array (list) of task objects like { text: "Buy milk", done: false }
+    let tasks = [];
+
+    // 3. Load saved tasks from the browser's memory (localStorage), if any exist.
+    //    try/catch stops the app from crashing if storage is unavailable.
+    try {
+      const saved = localStorage.getItem("tasks");
+      if (saved) tasks = JSON.parse(saved);
+    } catch (error) {
+      console.log("Could not load saved tasks:", error);
+    }
+
+    // 4. Save the current tasks so they're still here after a refresh
+    function save() {
+      try {
+        localStorage.setItem("tasks", JSON.stringify(tasks));
+      } catch (error) {
+        console.log("Could not save tasks:", error);
+      }
+    }
+
+    // 5. Draw the tasks on the page. We call this every time something changes.
+    function render() {
+      list.innerHTML = ""; // clear the old list
+
+      tasks.forEach((task, index) => {
+        const li = document.createElement("li");
+        if (task.done) li.classList.add("done");
+
+        // Checkbox: ticks a task done or not done
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = task.done;
+        checkbox.setAttribute("aria-label", "Mark done: " + task.text);
+        checkbox.addEventListener("change", () => {
+          tasks[index].done = checkbox.checked;
+          save();
+          render();
+        });
+
+        // The task text (textContent keeps typed text safe from code injection)
+        const text = document.createElement("span");
+        text.textContent = task.text;
+
+        // Delete button: removes this task from the array
+        const del = document.createElement("button");
+        del.className = "delete-btn";
+        del.textContent = "Delete";
+        del.setAttribute("aria-label", "Delete: " + task.text);
+        del.addEventListener("click", () => {
+          tasks.splice(index, 1);
+          save();
+          render();
+        });
+
+        li.append(checkbox, text, del);
+        list.appendChild(li);
+      });
+
+      // Update the empty message and the "x of y done" summary
+      const doneCount = tasks.filter(t => t.done).length;
+      emptyMsg.style.display = tasks.length === 0 ? "block" : "none";
+      list.style.display = tasks.length === 0 ? "none" : "block";
+      summary.textContent = tasks.length === 0
+        ? "Nothing to do yet."
+        : doneCount + " of " + tasks.length + " done";
+    }
+
+    // 6. Add a new task
+    function addTask() {
+      const value = input.value.trim(); // trim() removes extra spaces
+      if (value === "") return;         // ignore empty input
+
+      tasks.push({ text: value, done: false });
+      input.value = "";
+      input.focus();
+      save();
+      render();
+    }
+
+    // 7. Listen for clicks on the button and the Enter key in the text box
+    addBtn.addEventListener("click", addTask);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") addTask();
+    });
+
+    // 8. Draw the list for the first time when the page loads
+    render();
+  </script>
+</body>
+</html>
