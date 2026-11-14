@@ -17,7 +17,7 @@
     @media (prefers-color-scheme: dark) {
       :root {
         --bg: #17150f; --card: #211e16; --text: #f1ecdf; --muted: #a39b87;
-        --line: #36322580; --gold: #e0b43a; --gold-soft: rgba(224,180,58,0.16);
+        --line: #363225; --gold: #e0b43a; --gold-soft: rgba(224,180,58,0.16);
         --accent-text: #17150f; --up: #5cc487; --down: #ee7d70;
       }
     }
@@ -30,15 +30,34 @@
     main { width: 100%; max-width: 820px; }
     h1 { font-family: Georgia, serif; font-size: 2.1rem; margin: 0; }
     .sub { color: var(--muted); margin: 4px 0 16px; }
+    a { color: var(--gold); }
 
     .notice {
       background: var(--gold-soft); border-left: 4px solid var(--gold);
-      padding: 10px 14px; border-radius: 6px; font-size: 0.9rem; margin: 0 0 24px;
+      padding: 10px 14px; border-radius: 6px; font-size: 0.9rem; margin: 0 0 16px;
     }
 
+    .key-panel {
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      padding: 10px 14px; margin-bottom: 24px; font-size: 0.9rem;
+    }
+    .key-panel summary { cursor: pointer; font-weight: 600; }
+    .key-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .key-row input {
+      flex: 1 1 220px; padding: 10px 12px; font-size: 1rem;
+      color: var(--text); background: var(--bg);
+      border: 1px solid var(--line); border-radius: 8px;
+    }
+    .key-row button {
+      padding: 10px 16px; font-size: 0.95rem; cursor: pointer; border-radius: 8px;
+      background: var(--gold); color: var(--accent-text); border: 1px solid var(--gold); font-weight: 600;
+    }
+    .key-row button.secondary { background: var(--card); color: var(--text); border-color: var(--line); font-weight: 400; }
+    .small { color: var(--muted); font-size: 0.85rem; margin: 8px 0 0; }
+
     .top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px; }
-    .price { font-family: Georgia, serif; font-size: 2.6rem; line-height: 1.1; }
-    .change { font-size: 1rem; margin-top: 4px; font-weight: 600; }
+    .price { font-family: Georgia, serif; font-size: 2.6rem; line-height: 1.1; min-height: 2.9rem; }
+    .change { font-size: 1rem; margin-top: 4px; font-weight: 600; min-height: 1.4rem; }
     .change.up { color: var(--up); }
     .change.down { color: var(--down); }
 
@@ -51,29 +70,39 @@
     .ranges button[aria-pressed="true"] {
       background: var(--gold); color: var(--accent-text); border-color: var(--gold); font-weight: 600;
     }
-    button:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+    button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
 
     .chart-wrap {
-      position: relative; height: 360px; margin: 20px 0;
+      position: relative; height: 360px; margin: 20px 0 8px;
       background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px;
     }
+    #error { color: var(--down); margin: 8px 0; min-height: 1.2rem; }
 
-    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
     .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
     .stat .label { color: var(--muted); font-size: 0.85rem; }
     .stat .value { font-size: 1.25rem; font-weight: 600; margin-top: 4px; }
-    #error { color: var(--down); }
   </style>
 </head>
 
 <body>
   <main>
     <h1>Gold price</h1>
-    <p class="sub">USD per troy ounce</p>
+    <p class="sub">XAU/USD, US dollars per troy ounce</p>
 
-    <p class="notice" role="note">
-      <strong>Demo data.</strong> These prices are simulated for learning and are not real market prices.
-    </p>
+    <p class="notice" id="notice" role="note"></p>
+
+    <details class="key-panel" id="key-panel">
+      <summary>Live data settings</summary>
+      <p>Paste your free <a href="https://twelvedata.com" target="_blank" rel="noopener">Twelve Data</a>
+         API key. It is saved only in this browser, never in this file.</p>
+      <div class="key-row">
+        <input type="password" id="key-input" placeholder="Your API key" aria-label="Twelve Data API key" autocomplete="off">
+        <button id="key-save">Save key</button>
+        <button id="key-remove" class="secondary">Remove key</button>
+      </div>
+      <p class="small" id="key-status"></p>
+    </details>
 
     <section class="top">
       <div>
@@ -92,6 +121,7 @@
       <canvas id="chart" role="img" aria-label="Line chart of the gold price over the selected time range"></canvas>
     </div>
     <p id="error" role="alert"></p>
+    <p class="small" id="source"></p>
 
     <section class="stats">
       <div class="stat"><div class="label">Start of range</div><div class="value" id="stat-start"></div></div>
@@ -102,16 +132,69 @@
 
   <script>
     // ===== 1. Settings for each time range =====
-    // hours = how far back to look, step = keep every Nth hourly point
+    // interval = size of each data point, count = how many points to ask for.
+    // Markets close at weekends, so "Day" and "Week" mean the latest trading
+    // bars (about 24 hours and about 5 trading days), not exact calendar time.
     const RANGES = {
-      day:   { hours: 24,   step: 1 },
-      week:  { hours: 168,  step: 4 },
-      month: { hours: 720,  step: 24 },
-      year:  { hours: 8760, step: 24 }
+      day:   { interval: "15min", count: 96,  ms: 900000 },
+      week:  { interval: "1h",    count: 120, ms: 3600000 },
+      month: { interval: "4h",    count: 132, ms: 14400000 },
+      year:  { interval: "1day",  count: 260, ms: 86400000 }
     };
 
-    // ===== 2. DEMO DATA (swap this part for a real price source later) =====
-    // A seeded random generator gives the same "random" numbers every time.
+    // ===== 2. Remember the API key in this browser only =====
+    const KEY_NAME = "twelvedata_key";
+    function loadKey() {
+      try { return localStorage.getItem(KEY_NAME) || ""; } catch (e) { return ""; }
+    }
+    function storeKey(value) {
+      try {
+        if (value) localStorage.setItem(KEY_NAME, value);
+        else localStorage.removeItem(KEY_NAME);
+      } catch (e) { console.log("Could not save key:", e); }
+    }
+    let apiKey = loadKey();
+
+    // ===== 3. LIVE DATA from Twelve Data =====
+    const cache = {}; // remember answers for 5 minutes to save your daily request limit
+
+    // Twelve Data gives times like "2026-11-14 10:00:00" (UTC) or "2026-11-14"
+    function parseTime(text) {
+      const iso = text.length > 10 ? text.replace(" ", "T") + "Z" : text + "T00:00:00Z";
+      return new Date(iso);
+    }
+
+    async function fetchLive(range) {
+      const hit = cache[range];
+      if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.points;
+
+      const { interval, count } = RANGES[range];
+      const url = "https://api.twelvedata.com/time_series?" + new URLSearchParams({
+        symbol: "XAU/USD",
+        interval: interval,
+        outputsize: count,
+        timezone: "UTC",
+        apikey: apiKey
+      });
+
+      const response = await fetch(url);
+      const json = await response.json();
+
+      // Errors (bad key, rate limit...) come back as JSON with status "error"
+      if (json.status === "error" || !Array.isArray(json.values)) {
+        throw new Error(json.message || "Unexpected response from Twelve Data.");
+      }
+
+      // The newest point comes first, so reverse to get oldest to newest
+      const points = json.values
+        .map(v => ({ time: parseTime(v.datetime), price: Number(v.close) }))
+        .reverse();
+
+      cache[range] = { at: Date.now(), points: points };
+      return points;
+    }
+
+    // ===== 4. DEMO DATA (used when no key is saved) =====
     function mulberry32(seed) {
       return function () {
         seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
@@ -121,53 +204,44 @@
       };
     }
 
-    // Build one year of hourly prices as a random walk ending near $4,150
-    function makeDemoSeries() {
-      const rand = mulberry32(2026);
-      const total = 8760, hourMs = 3600000, now = Date.now();
+    function demoPrices(range) {
+      const { count, ms } = RANGES[range];
+      const rand = mulberry32(count * 31 + 7);
+      const size = 0.0025 * Math.sqrt(ms / 3600000); // bigger steps for longer bars
       const walk = [];
       let x = 0;
-      for (let i = 0; i < total; i++) {
-        x += (rand() + rand() + rand() - 1.5) * 0.0025; // small up/down move each hour
+      for (let i = 0; i < count; i++) {
+        x += (rand() + rand() + rand() - 1.5) * size;
         walk.push(x);
       }
-      const last = walk[total - 1];
+      const last = walk[count - 1], now = Date.now();
       return walk.map((value, i) => ({
-        time: new Date(now - (total - 1 - i) * hourMs),
-        price: 4150 * Math.exp(value - last) // shift so the final price is 4150
+        time: new Date(now - (count - 1 - i) * ms),
+        price: 4150 * Math.exp(value - last)
       }));
     }
-    const demoSeries = makeDemoSeries();
 
-    // The ONE function that provides prices. To use real data later, change
-    // only this function. It must return a list like [{ time: Date, price: number }].
-    async function getPrices(range) {
-      const { hours, step } = RANGES[range];
-      const slice = demoSeries.slice(-hours);
-      // Keep every Nth point, counting back from the newest so it's always included
-      return slice.filter((_, i) => (slice.length - 1 - i) % step === 0);
-    }
-
-    // ===== 3. Formatting helpers =====
+    // ===== 5. Formatting helpers =====
     const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
     function shortLabel(date, range) {
       if (range === "day") return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       if (range === "week") return date.toLocaleDateString([], { weekday: "short", day: "numeric" });
-      return date.toLocaleDateString([], { day: "numeric", month: "short" });
+      const opts = { day: "numeric", month: "short" };
+      if (range === "year") opts.timeZone = "UTC"; // daily bars are dated in UTC
+      return date.toLocaleDateString([], opts);
     }
 
     function fullLabel(date, range) {
-      const withTime = range === "day" || range === "week";
-      return date.toLocaleString([], { dateStyle: "medium", timeStyle: withTime ? "short" : undefined });
+      if (range === "year") return date.toLocaleDateString([], { dateStyle: "medium", timeZone: "UTC" });
+      return date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
     }
 
-    // Read a colour from the CSS variables so the chart matches light/dark mode
     function css(name) {
       return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
     }
 
-    // ===== 4. Show the headline numbers =====
+    // ===== 6. Headline numbers =====
     function updateStats(data) {
       const prices = data.map(p => p.price);
       const first = prices[0];
@@ -188,7 +262,7 @@
       document.getElementById("stat-low").textContent = money.format(Math.min(...prices));
     }
 
-    // ===== 5. Draw the chart =====
+    // ===== 7. The chart =====
     let chart = null;
     let current = "month";
     let currentData = [];
@@ -198,7 +272,7 @@
       const titles = data.map(p => fullLabel(p.time, range));
       const prices = data.map(p => p.price);
 
-      if (chart) chart.destroy(); // remove the old chart before drawing a new one
+      if (chart) chart.destroy();
 
       chart = new Chart(document.getElementById("chart"), {
         type: "line",
@@ -208,11 +282,8 @@
             data: prices,
             borderColor: css("--gold"),
             backgroundColor: css("--gold-soft"),
-            borderWidth: 2,
-            fill: true,
-            tension: 0.2,
-            pointRadius: 0,
-            pointHoverRadius: 5
+            borderWidth: 2, fill: true, tension: 0.2,
+            pointRadius: 0, pointHoverRadius: 5
           }]
         },
         options: {
@@ -229,47 +300,95 @@
             }
           },
           scales: {
-            x: {
-              ticks: { color: css("--muted"), maxTicksLimit: 6, maxRotation: 0 },
-              grid: { display: false }
-            },
-            y: {
-              ticks: { color: css("--muted"), callback: v => "$" + v.toLocaleString() },
-              grid: { color: css("--line") }
-            }
+            x: { ticks: { color: css("--muted"), maxTicksLimit: 6, maxRotation: 0 }, grid: { display: false } },
+            y: { ticks: { color: css("--muted"), callback: v => "$" + v.toLocaleString() }, grid: { color: css("--line") } }
           }
         }
       });
     }
 
-    // ===== 6. Switch range: fetch data, then update numbers and chart =====
+    // ===== 8. Show a range: get data, then update numbers and chart =====
+    function setSource(isDemo, lastTime) {
+      const notice = document.getElementById("notice");
+      notice.style.display = isDemo ? "block" : "none";
+      notice.innerHTML = "<strong>Demo data.</strong> These prices are simulated and not real. " +
+        "Open <em>Live data settings</em> below and add your Twelve Data key to see real prices.";
+      document.getElementById("source").textContent = isDemo
+        ? "Source: simulated demo data."
+        : "Source: Twelve Data, XAU/USD. Latest data point: " + lastTime.toLocaleString() +
+          ". Prices may be delayed. Not financial advice.";
+    }
+
+    function friendlyError(error) {
+      if (error instanceof TypeError) {
+        return "Could not reach Twelve Data. Check your internet connection and try again.";
+      }
+      return "Twelve Data said: " + error.message;
+    }
+
     async function showRange(range) {
       current = range;
       document.querySelectorAll(".ranges button").forEach(btn => {
         btn.setAttribute("aria-pressed", btn.dataset.range === range ? "true" : "false");
       });
+      const errorEl = document.getElementById("error");
+      errorEl.textContent = "";
+
       try {
-        document.getElementById("error").textContent = "";
-        currentData = await getPrices(range);
+        if (apiKey) {
+          currentData = await fetchLive(range);
+          setSource(false, currentData[currentData.length - 1].time);
+        } else {
+          currentData = demoPrices(range);
+          setSource(true);
+        }
         updateStats(currentData);
         drawChart(currentData, range);
       } catch (error) {
-        document.getElementById("error").textContent =
-          "Could not load the chart. Check your internet connection and refresh.";
+        errorEl.textContent = friendlyError(error);
         console.log(error);
       }
     }
 
-    // ===== 7. Wire up the buttons and start =====
+    // ===== 9. Buttons and key settings =====
+    const keyPanel = document.getElementById("key-panel");
+    const keyInput = document.getElementById("key-input");
+    const keyStatus = document.getElementById("key-status");
+
+    function updateKeyStatus() {
+      keyStatus.textContent = apiKey ? "A key is saved in this browser." : "No key saved yet.";
+      keyPanel.open = !apiKey; // open the panel automatically until a key is saved
+    }
+
     document.querySelectorAll(".ranges button").forEach(btn => {
       btn.addEventListener("click", () => showRange(btn.dataset.range));
     });
 
-    // Redraw if the computer switches between light and dark mode
+    document.getElementById("key-save").addEventListener("click", () => {
+      const value = keyInput.value.trim();
+      if (!value) return;
+      apiKey = value;
+      storeKey(apiKey);
+      keyInput.value = "";
+      Object.keys(cache).forEach(k => delete cache[k]);
+      updateKeyStatus();
+      showRange(current);
+    });
+
+    document.getElementById("key-remove").addEventListener("click", () => {
+      apiKey = "";
+      storeKey("");
+      Object.keys(cache).forEach(k => delete cache[k]);
+      updateKeyStatus();
+      showRange(current);
+    });
+
+    // Redraw the chart if the computer switches between light and dark mode
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
       if (currentData.length) drawChart(currentData, current);
     });
 
+    updateKeyStatus();
     showRange("month");
   </script>
 </body>
