@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gold Price Dashboard</title>
+
+  <!-- Chart.js draws the chart for us. It loads from the internet (a "CDN"). -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+
+  <style>
+    :root {
+      --bg: #f4f1ea; --card: #ffffff; --text: #23201a; --muted: #766f60;
+      --line: #e3ddcf; --gold: #b8860b; --gold-soft: rgba(184,134,11,0.14);
+      --accent-text: #ffffff; --up: #1f7a45; --down: #b3372b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #17150f; --card: #211e16; --text: #f1ecdf; --muted: #a39b87;
+        --line: #36322580; --gold: #e0b43a; --gold-soft: rgba(224,180,58,0.16);
+        --accent-text: #17150f; --up: #5cc487; --down: #ee7d70;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 40px 16px; min-height: 100vh;
+      background: var(--bg); color: var(--text);
+      font-family: system-ui, sans-serif; display: flex; justify-content: center;
+    }
+    main { width: 100%; max-width: 820px; }
+    h1 { font-family: Georgia, serif; font-size: 2.1rem; margin: 0; }
+    .sub { color: var(--muted); margin: 4px 0 16px; }
+
+    .notice {
+      background: var(--gold-soft); border-left: 4px solid var(--gold);
+      padding: 10px 14px; border-radius: 6px; font-size: 0.9rem; margin: 0 0 24px;
+    }
+
+    .top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px; }
+    .price { font-family: Georgia, serif; font-size: 2.6rem; line-height: 1.1; }
+    .change { font-size: 1rem; margin-top: 4px; font-weight: 600; }
+    .change.up { color: var(--up); }
+    .change.down { color: var(--down); }
+
+    .ranges { display: flex; gap: 6px; }
+    .ranges button {
+      padding: 8px 16px; font-size: 0.95rem; cursor: pointer;
+      background: var(--card); color: var(--text);
+      border: 1px solid var(--line); border-radius: 999px;
+    }
+    .ranges button[aria-pressed="true"] {
+      background: var(--gold); color: var(--accent-text); border-color: var(--gold); font-weight: 600;
+    }
+    button:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+
+    .chart-wrap {
+      position: relative; height: 360px; margin: 20px 0;
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px;
+    }
+
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+    .stat .label { color: var(--muted); font-size: 0.85rem; }
+    .stat .value { font-size: 1.25rem; font-weight: 600; margin-top: 4px; }
+    #error { color: var(--down); }
+  </style>
+</head>
+
+<body>
+  <main>
+    <h1>Gold price</h1>
+    <p class="sub">USD per troy ounce</p>
+
+    <p class="notice" role="note">
+      <strong>Demo data.</strong> These prices are simulated for learning and are not real market prices.
+    </p>
+
+    <section class="top">
+      <div>
+        <div id="price" class="price"></div>
+        <div id="change" class="change"></div>
+      </div>
+      <div class="ranges" role="group" aria-label="Time range">
+        <button data-range="day" aria-pressed="false">Day</button>
+        <button data-range="week" aria-pressed="false">Week</button>
+        <button data-range="month" aria-pressed="true">Month</button>
+        <button data-range="year" aria-pressed="false">Year</button>
+      </div>
+    </section>
+
+    <div class="chart-wrap">
+      <canvas id="chart" role="img" aria-label="Line chart of the gold price over the selected time range"></canvas>
+    </div>
+    <p id="error" role="alert"></p>
+
+    <section class="stats">
+      <div class="stat"><div class="label">Start of range</div><div class="value" id="stat-start"></div></div>
+      <div class="stat"><div class="label">High</div><div class="value" id="stat-high"></div></div>
+      <div class="stat"><div class="label">Low</div><div class="value" id="stat-low"></div></div>
+    </section>
+  </main>
+
+  <script>
+    // ===== 1. Settings for each time range =====
+    // hours = how far back to look, step = keep every Nth hourly point
+    const RANGES = {
+      day:   { hours: 24,   step: 1 },
+      week:  { hours: 168,  step: 4 },
+      month: { hours: 720,  step: 24 },
+      year:  { hours: 8760, step: 24 }
+    };
+
+    // ===== 2. DEMO DATA (swap this part for a real price source later) =====
+    // A seeded random generator gives the same "random" numbers every time.
+    function mulberry32(seed) {
+      return function () {
+        seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    // Build one year of hourly prices as a random walk ending near $4,150
+    function makeDemoSeries() {
+      const rand = mulberry32(2026);
+      const total = 8760, hourMs = 3600000, now = Date.now();
+      const walk = [];
+      let x = 0;
+      for (let i = 0; i < total; i++) {
+        x += (rand() + rand() + rand() - 1.5) * 0.0025; // small up/down move each hour
+        walk.push(x);
+      }
+      const last = walk[total - 1];
+      return walk.map((value, i) => ({
+        time: new Date(now - (total - 1 - i) * hourMs),
+        price: 4150 * Math.exp(value - last) // shift so the final price is 4150
+      }));
+    }
+    const demoSeries = makeDemoSeries();
+
+    // The ONE function that provides prices. To use real data later, change
+    // only this function. It must return a list like [{ time: Date, price: number }].
+    async function getPrices(range) {
+      const { hours, step } = RANGES[range];
+      const slice = demoSeries.slice(-hours);
+      // Keep every Nth point, counting back from the newest so it's always included
+      return slice.filter((_, i) => (slice.length - 1 - i) % step === 0);
+    }
+
+    // ===== 3. Formatting helpers =====
+    const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+    function shortLabel(date, range) {
+      if (range === "day") return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      if (range === "week") return date.toLocaleDateString([], { weekday: "short", day: "numeric" });
+      return date.toLocaleDateString([], { day: "numeric", month: "short" });
+    }
+
+    function fullLabel(date, range) {
+      const withTime = range === "day" || range === "week";
+      return date.toLocaleString([], { dateStyle: "medium", timeStyle: withTime ? "short" : undefined });
+    }
+
+    // Read a colour from the CSS variables so the chart matches light/dark mode
+    function css(name) {
+      return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+
+    // ===== 4. Show the headline numbers =====
+    function updateStats(data) {
+      const prices = data.map(p => p.price);
+      const first = prices[0];
+      const latest = prices[prices.length - 1];
+      const change = latest - first;
+      const percent = (change / first) * 100;
+      const sign = change >= 0 ? "+" : "-";
+
+      document.getElementById("price").textContent = money.format(latest);
+
+      const changeEl = document.getElementById("change");
+      changeEl.textContent = sign + money.format(Math.abs(change)) +
+        " (" + sign + Math.abs(percent).toFixed(2) + "%) over this range";
+      changeEl.className = "change " + (change >= 0 ? "up" : "down");
+
+      document.getElementById("stat-start").textContent = money.format(first);
+      document.getElementById("stat-high").textContent = money.format(Math.max(...prices));
+      document.getElementById("stat-low").textContent = money.format(Math.min(...prices));
+    }
+
+    // ===== 5. Draw the chart =====
+    let chart = null;
+    let current = "month";
+    let currentData = [];
+
+    function drawChart(data, range) {
+      const labels = data.map(p => shortLabel(p.time, range));
+      const titles = data.map(p => fullLabel(p.time, range));
+      const prices = data.map(p => p.price);
+
+      if (chart) chart.destroy(); // remove the old chart before drawing a new one
+
+      chart = new Chart(document.getElementById("chart"), {
+        type: "line",
+        data: {
+          labels: labels,
+          datasets: [{
+            data: prices,
+            borderColor: css("--gold"),
+            backgroundColor: css("--gold-soft"),
+            borderWidth: 2,
+            fill: true,
+            tension: 0.2,
+            pointRadius: 0,
+            pointHoverRadius: 5
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: items => titles[items[0].dataIndex],
+                label: item => money.format(item.parsed.y)
+              }
+            }
+          },
+          scales: {
+            x: {
+              ticks: { color: css("--muted"), maxTicksLimit: 6, maxRotation: 0 },
+              grid: { display: false }
+            },
+            y: {
+              ticks: { color: css("--muted"), callback: v => "$" + v.toLocaleString() },
+              grid: { color: css("--line") }
+            }
+          }
+        }
+      });
+    }
+
+    // ===== 6. Switch range: fetch data, then update numbers and chart =====
+    async function showRange(range) {
+      current = range;
+      document.querySelectorAll(".ranges button").forEach(btn => {
+        btn.setAttribute("aria-pressed", btn.dataset.range === range ? "true" : "false");
+      });
+      try {
+        document.getElementById("error").textContent = "";
+        currentData = await getPrices(range);
+        updateStats(currentData);
+        drawChart(currentData, range);
+      } catch (error) {
+        document.getElementById("error").textContent =
+          "Could not load the chart. Check your internet connection and refresh.";
+        console.log(error);
+      }
+    }
+
+    // ===== 7. Wire up the buttons and start =====
+    document.querySelectorAll(".ranges button").forEach(btn => {
+      btn.addEventListener("click", () => showRange(btn.dataset.range));
+    });
+
+    // Redraw if the computer switches between light and dark mode
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+      if (currentData.length) drawChart(currentData, current);
+    });
+
+    showRange("month");
+  </script>
+</body>
+</html>
