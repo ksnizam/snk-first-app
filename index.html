@@ -56,9 +56,9 @@
     }
 
     /* The row with the text box and the Add button */
-    .add-row { display: flex; gap: 8px; margin-bottom: 16px; }
+    .add-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 
-    input[type="text"] {
+    input[type="text"], input[type="date"] {
       flex: 1;
       padding: 12px 14px;
       font-size: 1rem;
@@ -136,6 +136,27 @@
     /* The text box that appears while editing a task */
     li input.edit-input { padding: 8px 10px; min-width: 0; }
 
+    /* Date pickers keep their natural width; the text box grows and wraps */
+    input[type="date"] { flex: none; }
+    .add-row input[type="text"] { flex: 1 1 200px; }
+    li input[type="date"] { padding: 8px 10px; font-size: 0.9rem; }
+
+    /* Task text with its due date underneath */
+    .task-body { flex: 1; min-width: 0; }
+    .due {
+      display: block;
+      margin-top: 2px;
+      font-family: system-ui, sans-serif;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .due.overdue { color: #c0392b; font-weight: 600; }
+    .due.today { color: var(--accent); font-weight: 600; }
+
+    /* Edit mode: text box and date picker stacked */
+    .edit-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+    .edit-fields .edit-input { width: 100%; }
+
     /* Message shown when the list is empty */
     #empty {
       text-align: center;
@@ -143,6 +164,40 @@
       font-family: system-ui, sans-serif;
       padding: 28px 0;
     }
+
+    /* Filter buttons and sort toggle */
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      font-family: system-ui, sans-serif;
+    }
+    .filters { display: flex; gap: 6px; }
+    .filters button {
+      padding: 6px 14px;
+      font-size: 0.9rem;
+      background: var(--card);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+    }
+    .filters button[aria-pressed="true"] {
+      background: var(--accent);
+      color: var(--accent-text);
+      border-color: var(--accent);
+    }
+    .sort {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.9rem;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .sort input { width: 16px; height: 16px; accent-color: var(--accent); }
   </style>
 </head>
 
@@ -154,7 +209,17 @@
 
     <div class="add-row">
       <input type="text" id="task-input" placeholder="What needs doing?" aria-label="New task" autofocus>
+      <input type="date" id="due-input" aria-label="Due date (optional)">
       <button class="add-btn" id="add-btn">Add task</button>
+    </div>
+
+    <div class="toolbar">
+      <div class="filters" role="group" aria-label="Filter tasks">
+        <button data-filter="all" aria-pressed="true">All</button>
+        <button data-filter="active" aria-pressed="false">Active</button>
+        <button data-filter="done" aria-pressed="false">Done</button>
+      </div>
+      <label class="sort"><input type="checkbox" id="sort-toggle"> Sort by due date</label>
     </div>
 
     <ul id="task-list"></ul>
@@ -165,25 +230,38 @@
   <script>
     // 1. Grab the elements we need to work with
     const input = document.getElementById("task-input");
+    const dueInput = document.getElementById("due-input");
     const addBtn = document.getElementById("add-btn");
     const list = document.getElementById("task-list");
     const emptyMsg = document.getElementById("empty");
     const summary = document.getElementById("summary");
+    const sortToggle = document.getElementById("sort-toggle");
+    const filterButtons = document.querySelectorAll(".filters button");
 
-    // 2. Our data: an array (list) of task objects like { text: "Buy milk", done: false }
+    // 2. Our data: a list of task objects like
+    //    { id: "k3j2x9", text: "Buy milk", due: "2026-11-20", done: false }
     let tasks = [];
 
-    // Which task is being edited right now? null means none.
-    let editingIndex = null;
+    // Settings for what we show (not saved, they reset on refresh)
+    let editingId = null;     // id of the task being edited, or null for none
+    let filter = "all";       // "all", "active" or "done"
+    let sortByDue = false;    // is the sort toggle on?
 
-    // 3. Load saved tasks from the browser's memory (localStorage), if any exist.
-    //    try/catch stops the app from crashing if storage is unavailable.
+    // Every task gets a unique id. Unlike its position in the list, an id
+    // never changes, even when we sort or filter.
+    function newId() {
+      return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    }
+
+    // 3. Load saved tasks from the browser's memory (localStorage)
     try {
       const saved = localStorage.getItem("tasks");
       if (saved) tasks = JSON.parse(saved);
     } catch (error) {
       console.log("Could not load saved tasks:", error);
     }
+    // Tasks saved before this update have no id, so give them one
+    tasks.forEach(task => { if (!task.id) task.id = newId(); });
 
     // 4. Save the current tasks so they're still here after a refresh
     function save() {
@@ -194,11 +272,54 @@
       }
     }
 
+    // Today's date as "YYYY-MM-DD", so dates can be compared as text
+    function todayString() {
+      const d = new Date();
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return d.getFullYear() + "-" + month + "-" + day;
+    }
+
+    // Turn "2026-11-20" into a friendly label, and say if it's overdue or today
+    function describeDue(due, done) {
+      const [year, month, day] = due.split("-").map(Number);
+      const pretty = new Date(year, month - 1, day).toLocaleDateString(undefined, {
+        month: "short", day: "numeric", year: "numeric"
+      });
+      const today = todayString();
+
+      if (due === today) return { label: "Due today", status: done ? "" : "today" };
+      if (due < today) return { label: (done ? "Was due " : "Overdue: ") + pretty, status: done ? "" : "overdue" };
+      return { label: "Due " + pretty, status: "" };
+    }
+
+    // Sorting rule: earliest due date first, tasks with no date go last.
+    // A compare function returns a negative number if a comes first,
+    // a positive number if b comes first, and 0 if they tie.
+    function compareDue(a, b) {
+      if (a.due && b.due) return a.due < b.due ? -1 : a.due > b.due ? 1 : 0;
+      if (a.due) return -1;
+      if (b.due) return 1;
+      return 0;
+    }
+
+    // Work out which tasks to show: filter first, then sort.
+    // We make a copy so the real `tasks` list keeps its original order.
+    function getVisibleTasks() {
+      let visible = tasks.filter(task => {
+        if (filter === "active") return !task.done;
+        if (filter === "done") return task.done;
+        return true;
+      });
+      if (sortByDue) visible = visible.sort(compareDue);
+      return visible;
+    }
+
     // 5. Draw the tasks on the page. We call this every time something changes.
     function render() {
       list.innerHTML = ""; // clear the old list
 
-      tasks.forEach((task, index) => {
+      getVisibleTasks().forEach(task => {
         const li = document.createElement("li");
         if (task.done) li.classList.add("done");
 
@@ -208,8 +329,8 @@
         checkbox.checked = task.done;
         checkbox.setAttribute("aria-label", "Mark done: " + task.text);
         checkbox.addEventListener("change", () => {
-          tasks[index].done = checkbox.checked;
-          editingIndex = null;
+          task.done = checkbox.checked;
+          editingId = null;
           save();
           render();
         });
@@ -218,43 +339,62 @@
         const text = document.createElement("span");
         text.textContent = task.text;
 
-        // Delete button: removes this task from the array
+        // Wrap the text and (if there is one) the due date together
+        const body = document.createElement("div");
+        body.className = "task-body";
+        body.appendChild(text);
+        if (task.due) {
+          const info = describeDue(task.due, task.done);
+          const dueEl = document.createElement("span");
+          dueEl.className = "due " + info.status;
+          dueEl.textContent = info.label;
+          body.appendChild(dueEl);
+        }
+
+        // Delete button: keep every task except this one
         const del = document.createElement("button");
         del.className = "delete-btn";
         del.textContent = "Delete";
         del.setAttribute("aria-label", "Delete: " + task.text);
         del.addEventListener("click", () => {
-          tasks.splice(index, 1);
-          editingIndex = null; // indexes shift after a delete, so leave edit mode
+          tasks = tasks.filter(t => t.id !== task.id);
+          editingId = null;
           save();
           render();
         });
 
-        if (index === editingIndex) {
-          // EDIT MODE: show a text box with Save and Cancel buttons
+        if (task.id === editingId) {
+          // EDIT MODE: text box, date picker, Save and Cancel
           const editInput = document.createElement("input");
           editInput.type = "text";
           editInput.className = "edit-input";
           editInput.value = task.text;
           editInput.setAttribute("aria-label", "Edit task");
 
-          // Save the new text (ignore it if the box was emptied)
+          const editDate = document.createElement("input");
+          editDate.type = "date";
+          editDate.value = task.due || "";
+          editDate.setAttribute("aria-label", "Edit due date");
+
           const saveEdit = () => {
             const newText = editInput.value.trim();
-            if (newText !== "") tasks[index].text = newText;
-            editingIndex = null;
+            if (newText !== "") task.text = newText;
+            task.due = editDate.value; // empty string means no due date
+            editingId = null;
             save();
             render();
           };
           const cancelEdit = () => {
-            editingIndex = null;
+            editingId = null;
             render();
           };
 
-          editInput.addEventListener("keydown", (event) => {
+          const onKey = (event) => {
             if (event.key === "Enter") saveEdit();
             if (event.key === "Escape") cancelEdit();
-          });
+          };
+          editInput.addEventListener("keydown", onKey);
+          editDate.addEventListener("keydown", onKey);
 
           const saveBtn = document.createElement("button");
           saveBtn.className = "save-btn";
@@ -266,31 +406,43 @@
           cancelBtn.textContent = "Cancel";
           cancelBtn.addEventListener("click", cancelEdit);
 
-          li.append(checkbox, editInput, saveBtn, cancelBtn);
-          list.appendChild(li);
+          const fields = document.createElement("div");
+          fields.className = "edit-fields";
+          fields.append(editInput, editDate);
 
-          // Put the cursor in the box (must happen after it's on the page)
+          li.append(checkbox, fields, saveBtn, cancelBtn);
+          list.appendChild(li);
           editInput.focus();
         } else {
-          // NORMAL MODE: show the text with Edit and Delete buttons
+          // NORMAL MODE: text with Edit and Delete buttons
           const editBtn = document.createElement("button");
           editBtn.className = "edit-btn";
           editBtn.textContent = "Edit";
           editBtn.setAttribute("aria-label", "Edit: " + task.text);
           editBtn.addEventListener("click", () => {
-            editingIndex = index;
+            editingId = task.id;
             render();
           });
 
-          li.append(checkbox, text, editBtn, del);
+          li.append(checkbox, body, editBtn, del);
           list.appendChild(li);
         }
       });
 
-      // Update the empty message and the "x of y done" summary
+      // Light up the button for the current filter
+      filterButtons.forEach(btn => {
+        btn.setAttribute("aria-pressed", btn.dataset.filter === filter ? "true" : "false");
+      });
+
+      // Empty message: different text depending on why the list is empty
+      const showing = list.children.length;
+      if (tasks.length === 0) emptyMsg.textContent = "No tasks yet. Add your first one above.";
+      else emptyMsg.textContent = "No tasks match this filter.";
+      emptyMsg.style.display = showing === 0 ? "block" : "none";
+      list.style.display = showing === 0 ? "none" : "block";
+
+      // The summary always counts ALL tasks, whatever the filter
       const doneCount = tasks.filter(t => t.done).length;
-      emptyMsg.style.display = tasks.length === 0 ? "block" : "none";
-      list.style.display = tasks.length === 0 ? "none" : "block";
       summary.textContent = tasks.length === 0
         ? "Nothing to do yet."
         : doneCount + " of " + tasks.length + " done";
@@ -301,17 +453,34 @@
       const value = input.value.trim(); // trim() removes extra spaces
       if (value === "") return;         // ignore empty input
 
-      tasks.push({ text: value, done: false });
+      tasks.push({ id: newId(), text: value, due: dueInput.value, done: false });
       input.value = "";
+      dueInput.value = "";
       input.focus();
       save();
       render();
     }
 
-    // 7. Listen for clicks on the button and the Enter key in the text box
+    // 7. Listen for clicks and key presses
     addBtn.addEventListener("click", addTask);
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") addTask();
+    });
+
+    // Filter buttons: remember which one was clicked, then redraw
+    filterButtons.forEach(btn => {
+      btn.addEventListener("click", () => {
+        filter = btn.dataset.filter;
+        editingId = null;
+        render();
+      });
+    });
+
+    // Sort toggle
+    sortToggle.addEventListener("change", () => {
+      sortByDue = sortToggle.checked;
+      editingId = null;
+      render();
     });
 
     // 8. Draw the list for the first time when the page loads
